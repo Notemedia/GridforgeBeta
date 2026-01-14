@@ -60,7 +60,7 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
     <aside class="border-r border-line bg-paper flex flex-col h-full overflow-hidden z-20 shadow-[4px_0_12px_rgba(0,0,0,0.05)]">
       <div class="p-3 border-b border-line bg-paper shrink-0 space-y-3">
         <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-2"><div class="w-7 h-7 bg-ink text-paper flex items-center justify-center font-bold text-[10px] rounded shadow-sm">GF</div><div class="flex flex-col"><span class="text-[9px] font-bold text-graphite font-mono tracking-widest">PRO</span><span class="text-[8px] text-gray-400">v4.9.3</span></div></div>
+            <div class="flex items-center space-x-2"><div class="w-7 h-7 bg-ink text-paper flex items-center justify-center font-bold text-[10px] rounded shadow-sm">GF</div><div class="flex flex-col"><span class="text-[9px] font-bold text-graphite font-mono tracking-widest">PRO</span><span class="text-[8px] text-gray-400">v4.9.5</span></div></div>
             <div class="flex items-center space-x-1">
                 <button id="themeToggleBtn" class="w-6 h-6 flex items-center justify-center hover:bg-highlight rounded-full transition text-[10px]" title="Toggle Dark Mode">◑</button>
                 <div class="w-px h-3 bg-line mx-1"></div>
@@ -198,16 +198,16 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
             });
         }
     };
-    // --- IndexedDB Local Storage Wrapper (Versioned for v4.9) ---
+    // --- IndexedDB Local Storage Wrapper (Versioned for v4.9.5) ---
     const LocalDB = {
         dbName: 'GridForgeDB',
         storeName: 'projects',
-        key: 'current_project_v4_9', 
+        key: 'current_project_v4_9_5', 
         db: null,
         
         async init() {
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open(this.dbName, 1);
+                const request = indexedDB.open(this.dbName, 2); // Bump version to force upgrade if needed
                 request.onerror = (event) => reject("DB Error");
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
@@ -228,7 +228,7 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
                 const store = tx.objectStore(this.storeName);
                 const req = store.put(data, this.key);
                 req.onsuccess = () => resolve(true);
-                req.onerror = () => reject("Save Failed");
+                req.onerror = (e) => reject("Save Failed: " + e.target.error);
             });
         },
         async load() {
@@ -238,7 +238,7 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
                 const store = tx.objectStore(this.storeName);
                 const req = store.get(this.key);
                 req.onsuccess = (event) => resolve(event.target.result);
-                req.onerror = () => reject("Load Failed");
+                req.onerror = (e) => reject("Load Failed");
             });
         }
     };
@@ -247,20 +247,11 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
         isDirty: false,
         isSaving: false, 
         timer: null,
-        interval: null,
         statusEl: null,  
         init() {
             this.statusEl = $('autoSaveStatus');
-            this.interval = setInterval(() => { 
-                if (this.isDirty && !this.isSaving) this.saveNow(); 
-            }, 30000);
-            
             window.addEventListener('beforeunload', (e) => {
-                if (this.isDirty) {
-                    e.preventDefault();
-                    e.returnValue = 'You have unsaved changes.';
-                    return 'You have unsaved changes.';
-                }
+                if (this.isDirty) { e.preventDefault(); e.returnValue = 'You have unsaved changes.'; return 'You have unsaved changes.'; }
             });
         },
         markDirty() {
@@ -272,29 +263,23 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
         async saveNow() {
             if (this.isSaving || !this.isDirty) return;
             this.isSaving = true;
-            this.isDirty = false;
             const runSaveLogic = async () => {
                 try {
                     const projectData = await ProjectManager.prepareForAutoSave();
                     await LocalDB.save(projectData);
-                    if (!this.isDirty) {
-                        this.updateUI('saved');
-                    }
+                    this.isDirty = false;
+                    this.updateUI('saved');
                 } catch (e) {
                     console.error("AutoSave Failed:", e);
                     this.updateUI('error');
-                    this.isDirty = true;
+                    // Retry once
+                    if(!this.isDirty) { this.isDirty = true; setTimeout(() => this.saveNow(), 5000); }
                 } finally {
                     this.isSaving = false;
-                    
-                    if (this.isDirty) {
-                        clearTimeout(this.timer);
-                        this.timer = setTimeout(() => this.saveNow(), 2000);
-                    }
                 }
             };
             if (window.requestIdleCallback) {
-                window.requestIdleCallback(runSaveLogic, { timeout: 2000 });
+                window.requestIdleCallback(runSaveLogic, { timeout: 3000 });
             } else {
                 setTimeout(runSaveLogic, 50);
             }
@@ -423,6 +408,7 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
         inheritStructure(target, source) { const mockUrl = StateManager.sharedMockUrl; target.images = source.images.map(img => ({ id: generateId(), url: mockUrl, originalUrl: mockUrl, name: 'INHERITED_MOCK', level: img.level, index: img.index, isMock: true, text: "", isVideo: false, isBlank: false, version: 0 })); target.heroState = JSON.parse(JSON.stringify(source.heroState)); },
         saveCurrentState() {
             if (this.activeSheetId < 0) return;
+            // Use spread to copy image objects, ensuring Blobs are preserved (shallow copy of fields is enough for Blob reference)
             this.sheets[this.activeSheetId].images = StateManager.images.map(img => ({...img}));
             this.sheets[this.activeSheetId].heroState = JSON.parse(JSON.stringify(StateManager.heroState));
             this.sheets[this.activeSheetId].meta = { tl: $('metaTL').value, tr: $('metaTR').value, bl: $('metaBL').value, br: $('metaBR').value };
@@ -514,55 +500,210 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
     const ProjectManager = {
         async fetchBlob(url) { try { const controller = new AbortController(); const timeoutId = setTimeout(() => controller.abort(), 8000); const response = await fetch(url, { signal: controller.signal }); clearTimeout(timeoutId); if (!response.ok) throw new Error('Fetch failed'); return await response.blob(); } catch (e) { return null; } },
         async blobToBase64(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); },
-        // --- Enhanced Data Preparation (Supports both Export & AutoSave) ---
+        
+        // --- Completely Rewritten Data Prep to handle Blobs correctly ---
         async prepareData(forFileExport = false) {
-             SheetManager.saveCurrentState();
-             const sheetsExport = JSON.parse(JSON.stringify(SheetManager.sheets));
-             for (let sheet of sheetsExport) {
-                if (!forFileExport) await new Promise(r => setTimeout(r, 0)); // Non-blocking for AutoSave
-                const processImage = async (img) => {
-                    const originalImg = StateManager.images.find(i => i.id === img.id) || SheetManager.sheets.flatMap(s => s.images).find(i => i.id === img.id);
-                    if (!img.isMock && (img.url || (originalImg && originalImg.blobData))) {
-                        let blob = originalImg ? originalImg.blobData : null;
-                        if (!blob && img.url && !img.url.startsWith('data:')) { blob = await this.fetchBlob(img.url); }
-                        if (blob) { if (forFileExport) { img.embeddedData = await this.blobToBase64(blob); } else { img.blobData = blob; } } else if (img.url && img.url.startsWith('data:')) { img.embeddedData = img.url; }
-                        img.url = null; img.originalUrl = null;
-                    }
-                };
-                const chunkSize = 4;
-                for (let i = 0; i < sheet.images.length; i += chunkSize) { const chunk = sheet.images.slice(i, i + chunkSize); await Promise.all(chunk.map(processImage)); if (!forFileExport) await new Promise(r => setTimeout(r, 0)); }
-             }
-             return { version: "4.9.1", date: new Date().toISOString(), sheets: sheetsExport, globalSettings: { cols: $('colsInput').value, rows: $('rowsInput').value, gap: $('gapSlider').value, margin: $('marginSlider').value, paper: $('paperSizeSelect').value, orient: $('paperOrientationSelect').value, fontSize: $('fontSizeInput').value, lineHeight: $('lineHeightInput').value, algo: $('algoInput').value, meta: { tl: $('metaTL').value, tr: $('metaTR').value, bl: $('metaBL').value, br: $('metaBR').value } } };
+             SheetManager.saveCurrentState(); // Sync current editing state to SheetManager
+             
+             // Create export object manually to avoid JSON.stringify stripping Blobs prematurely
+             const sheetsExport = await Promise.all(SheetManager.sheets.map(async (sheet) => {
+                 const processedImages = [];
+                 for(const img of sheet.images) {
+                     const exportImg = { ...img }; // Shallow copy
+                     
+                     // Recover the Blob data
+                     let blob = img.blobData;
+                     
+                     // If no blobData on the object, try to fetch it from the URL if it's external or a persisting blob URL
+                     if (!blob && img.url && !img.isMock) {
+                         // We must fetch it to save it
+                         if (!img.url.startsWith('data:')) {
+                            blob = await this.fetchBlob(img.url);
+                         }
+                     }
+
+                     if (!img.isMock) {
+                         if (forFileExport) {
+                             // FILE EXPORT: Convert Blob to Base64 String
+                             if (blob) {
+                                 exportImg.embeddedData = await this.blobToBase64(blob);
+                                 // Important: Remove the blob object from file export to avoid errors and save space
+                                 delete exportImg.blobData; 
+                                 delete exportImg.url; 
+                                 delete exportImg.originalUrl;
+                             } else if (img.url && img.url.startsWith('data:')) {
+                                 exportImg.embeddedData = img.url;
+                             }
+                         } else {
+                             // AUTOSAVE (IndexedDB): Store the Blob Object directly
+                             if (blob) {
+                                 exportImg.blobData = blob;
+                                 // We don't need embeddedData for local storage
+                                 delete exportImg.embeddedData;
+                             }
+                         }
+                     }
+                     processedImages.push(exportImg);
+                 }
+
+                 return {
+                     id: sheet.id,
+                     meta: sheet.meta,
+                     heroState: sheet.heroState,
+                     images: processedImages
+                 };
+             }));
+
+             return { 
+                 version: "4.9.5", 
+                 date: new Date().toISOString(), 
+                 sheets: sheetsExport, 
+                 globalSettings: { 
+                     cols: $('colsInput').value, 
+                     rows: $('rowsInput').value, 
+                     gap: $('gapSlider').value, 
+                     margin: $('marginSlider').value, 
+                     paper: $('paperSizeSelect').value, 
+                     orient: $('paperOrientationSelect').value, 
+                     fontSize: $('fontSizeInput').value, 
+                     lineHeight: $('lineHeightInput').value, 
+                     algo: $('algoInput').value, 
+                     meta: { tl: $('metaTL').value, tr: $('metaTR').value, bl: $('metaBL').value, br: $('metaBR').value } 
+                 } 
+             };
         },
         async prepareForAutoSave() { return await this.prepareData(false); },
-        async save() { ExportManager.showLoading('SAVING PROJECT FILE...'); setTimeout(async () => { try { const projectData = await this.prepareData(true); const jsonString = JSON.stringify(projectData); const blob = new Blob([jsonString], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `GridForge_Project_${Date.now()}.gforge`; a.click(); URL.revokeObjectURL(url); AutoSaveManager.isDirty = false; AutoSaveManager.updateUI('saved'); } catch (e) { alert("Save failed: " + e.message); } finally { ExportManager.hideLoading(); } }, 100); },
-        // --- Enhanced Load Logic ---
+        async save() { 
+            ExportManager.showLoading('SAVING PROJECT FILE...'); 
+            setTimeout(async () => { 
+                try { 
+                    const projectData = await this.prepareData(true); 
+                    const jsonString = JSON.stringify(projectData); 
+                    const blob = new Blob([jsonString], { type: 'application/json' }); 
+                    const url = URL.createObjectURL(blob); 
+                    const a = document.createElement('a'); a.href = url; a.download = `GridForge_Project_${Date.now()}.gforge`; a.click(); 
+                    URL.revokeObjectURL(url); 
+                    AutoSaveManager.isDirty = false; 
+                    AutoSaveManager.updateUI('saved'); 
+                } catch (e) { 
+                    alert("Save failed: " + e.message); 
+                } finally { 
+                    ExportManager.hideLoading(); 
+                } 
+            }, 100); 
+        },
+        
+        // --- Enhanced Load Logic to Reconstruct Blobs ---
         async loadFromData(data) {
             try {
-                if(data.globalSettings) { $('colsInput').value = data.globalSettings.cols; $('rowsInput').value = data.globalSettings.rows; $('gapSlider').value = data.globalSettings.gap; $('gapValue').textContent = data.globalSettings.gap + 'px'; $('marginSlider').value = data.globalSettings.margin; $('marginValue').textContent = data.globalSettings.margin + 'px'; $('paperSizeSelect').value = data.globalSettings.paper; $('paperOrientationSelect').value = data.globalSettings.orient; if (data.globalSettings.fontSize) $('fontSizeInput').value = data.globalSettings.fontSize; if (data.globalSettings.lineHeight) $('lineHeightInput').value = data.globalSettings.lineHeight; if (data.globalSettings.algo) { $('algoInput').value = data.globalSettings.algo; UIManager.updateAlgoUI(data.globalSettings.algo); } if (data.globalSettings.meta) { $('metaTL').value = data.globalSettings.meta.tl || ""; $('metaTR').value = data.globalSettings.meta.tr || ""; $('metaBL').value = data.globalSettings.meta.bl || ""; $('metaBR').value = data.globalSettings.meta.br || ""; } }
+                if(data.globalSettings) { 
+                    $('colsInput').value = data.globalSettings.cols; 
+                    $('rowsInput').value = data.globalSettings.rows; 
+                    $('gapSlider').value = data.globalSettings.gap; $('gapValue').textContent = data.globalSettings.gap + 'px'; 
+                    $('marginSlider').value = data.globalSettings.margin; $('marginValue').textContent = data.globalSettings.margin + 'px'; 
+                    $('paperSizeSelect').value = data.globalSettings.paper; 
+                    $('paperOrientationSelect').value = data.globalSettings.orient; 
+                    if (data.globalSettings.fontSize) $('fontSizeInput').value = data.globalSettings.fontSize; 
+                    if (data.globalSettings.lineHeight) $('lineHeightInput').value = data.globalSettings.lineHeight; 
+                    if (data.globalSettings.algo) { $('algoInput').value = data.globalSettings.algo; UIManager.updateAlgoUI(data.globalSettings.algo); } 
+                    if (data.globalSettings.meta) { $('metaTL').value = data.globalSettings.meta.tl || ""; $('metaTR').value = data.globalSettings.meta.tr || ""; $('metaBL').value = data.globalSettings.meta.bl || ""; $('metaBR').value = data.globalSettings.meta.br || ""; } 
+                }
+                
                 StateManager.clearAllImages();
+                
                 for (let i = 0; i < SheetManager.sheets.length; i++) {
                     const savedSheet = data.sheets.find(s => s.id === i);
                     if(savedSheet) {
-                        if (savedSheet.meta) SheetManager.sheets[i].meta = savedSheet.meta; else if (data.globalSettings.meta) SheetManager.sheets[i].meta = data.globalSettings.meta;
+                        if (savedSheet.meta) SheetManager.sheets[i].meta = savedSheet.meta; 
+                        else if (data.globalSettings.meta) SheetManager.sheets[i].meta = data.globalSettings.meta;
+                        
                         SheetManager.sheets[i].heroState = savedSheet.heroState;
                         const restoredImages = [];
+                        
                         for (let img of savedSheet.images) {
-                            let restoredUrl = StateManager.sharedMockUrl, isMock = img.isMock, text = img.text, embeddedData = img.embeddedData, blobData = img.blobData;
+                            let restoredUrl = StateManager.sharedMockUrl;
+                            let isMock = img.isMock;
+                            let text = img.text;
+                            let restoredBlobData = img.blobData; // Might be present from AutoSave (IndexedDB)
+
                             if (!isMock) {
-                                if (blobData) { restoredUrl = BlobManager.create(blobData); } else if (embeddedData) { try { const res = await fetch(embeddedData); const blob = await res.blob(); restoredUrl = BlobManager.create(blob); blobData = blob; } catch (err) { restoredUrl = StateManager.createPlaceholder("DATA ERROR"); isMock = true; } } else { restoredUrl = StateManager.createPlaceholder("MISSING"); isMock = true; }
+                                // CASE 1: Blob Data exists (AutoSave restore)
+                                if (restoredBlobData) {
+                                    restoredUrl = BlobManager.create(restoredBlobData);
+                                } 
+                                // CASE 2: Embedded Base64 exists (File Load)
+                                else if (img.embeddedData) {
+                                    try {
+                                        const res = await fetch(img.embeddedData);
+                                        const blob = await res.blob();
+                                        restoredUrl = BlobManager.create(blob);
+                                        restoredBlobData = blob; // CRITICAL: Store the blob so next AutoSave works
+                                    } catch (err) {
+                                        console.error("Failed to restore image from embedded data", err);
+                                        restoredUrl = StateManager.createPlaceholder("DATA ERROR");
+                                        isMock = true;
+                                    }
+                                } else {
+                                    // Fallback
+                                    restoredUrl = StateManager.createPlaceholder("MISSING");
+                                    isMock = true;
+                                }
                             }
-                            restoredImages.push({ ...img, id: generateId(), url: restoredUrl, originalUrl: restoredUrl, isMock: isMock, text: text, embeddedData: null, blobData: blobData, version: 0 });
+                            
+                            restoredImages.push({ 
+                                ...img, 
+                                id: generateId(), // New ID for current session
+                                url: restoredUrl, 
+                                originalUrl: restoredUrl, 
+                                isMock: isMock, 
+                                text: text, 
+                                embeddedData: null, // Clear memory
+                                blobData: restoredBlobData, // Attach the blob for persistence
+                                version: 0 
+                            });
                         }
                         SheetManager.sheets[i].images = restoredImages;
                     } else { SheetManager.sheets[i].images = []; }
                 }
-                SheetManager.activeSheetId = -1; SheetManager.switchSheet(0);
+                
+                SheetManager.activeSheetId = -1; 
+                SheetManager.switchSheet(0);
                 return true;
             } catch(err) { console.error(err); return false; }
         },
-        async load(file) { ExportManager.showLoading('LOADING PROJECT...'); const reader = new FileReader(); reader.onload = async (e) => { try { const data = JSON.parse(e.target.result); if(data.version && data.sheets) { await this.loadFromData(data); alert("Project Loaded Successfully."); } } catch(err) { alert("Invalid Project File or Load Error"); } finally { ExportManager.hideLoading(); } }; reader.readAsText(file); },
-        async restoreAutoSave() { ExportManager.showLoading('RESTORING SESSION...'); try { const data = await LocalDB.load(); if (data) { await this.loadFromData(data); console.log("Session restored from AutoSave"); } } catch(e) { console.log("No AutoSave found or error restoring"); } finally { ExportManager.hideLoading(); } }
+        async load(file) { 
+            ExportManager.showLoading('LOADING PROJECT...'); 
+            const reader = new FileReader(); 
+            reader.onload = async (e) => { 
+                try { 
+                    const data = JSON.parse(e.target.result); 
+                    if(data.sheets) { 
+                        await this.loadFromData(data); 
+                        alert("Project Loaded Successfully."); 
+                    } 
+                } catch(err) { 
+                    console.error(err);
+                    alert("Invalid Project File or Load Error"); 
+                } finally { 
+                    ExportManager.hideLoading(); 
+                } 
+            }; 
+            reader.readAsText(file); 
+        },
+        async restoreAutoSave() { 
+            ExportManager.showLoading('RESTORING SESSION...'); 
+            try { 
+                const data = await LocalDB.load(); 
+                if (data) { 
+                    await this.loadFromData(data); 
+                    console.log("Session restored from AutoSave"); 
+                } 
+            } catch(e) { 
+                console.log("No AutoSave found or error restoring"); 
+            } finally { 
+                ExportManager.hideLoading(); 
+            } 
+        }
     };
     const ExportManager = {
         showLoading(msg) { $('loadingMsg').innerText = msg; $('loadingOverlay').classList.add('active'); }, hideLoading() { $('loadingOverlay').classList.remove('active'); },
@@ -590,7 +731,6 @@ html.dark .status-error { background: #7f1d1d; color: #fca5a5; }
       generateTopLeft(images, cols, rows, orientation, pixelDims) {
         const heroState = StateManager.heroState; let safeMargin = pixelDims.margin, safeGap = pixelDims.gap;
         const density = cols * rows; 
-        // MODIFIED: Increased thresholds to relax auto-fit (was 100/169)
         if (density > 256) { safeMargin = Math.min(safeMargin, 3 * (pixelDims.w / 1000)); safeGap = Math.min(safeGap, 2 * (pixelDims.w / 1000)); } 
         if (density > 400) { safeMargin = Math.min(safeMargin, 2 * (pixelDims.w / 1000)); safeGap = Math.min(safeGap, 1 * (pixelDims.w / 1000)); }
         
